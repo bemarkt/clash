@@ -152,27 +152,34 @@ func (t *Tunnel) handleConn(localConn C.ServerAdapter) {
 
 	switch metadata.NetWork {
 	case C.TCP:
-		t.handleTCPConn(localConn, metadata, proxy, rule)
+		t.handleTCPConn(localConn, metadata, proxy, t.mode, rule)
 	case C.UDP:
-		t.handleUDPConn(localConn, metadata, proxy, rule)
+		t.handleUDPConn(localConn, metadata, proxy, t.mode, rule)
 	}
 }
 
-func (t *Tunnel) handleUDPConn(localConn C.ServerAdapter, metadata *C.Metadata, proxy C.Proxy, rule C.Rule) {
+func (t *Tunnel) handleUDPConn(localConn C.ServerAdapter, metadata *C.Metadata, proxy C.Proxy, mode Mode, rule C.Rule) {
 	pc, addr := natTable.Get(localConn.RemoteAddr())
 	if pc == nil {
 		rawPc, nAddr, err := proxy.DialUDP(metadata)
 		addr = nAddr
 		pc = rawPc
 		if err != nil {
-			log.Warnln("dial %s error: %s", proxy.Name(), err.Error())
+			log.Warnln("[UDP] dial %s error: %s", proxy.Name(), err.Error())
 			return
 		}
 
-		if rule != nil {
-			log.Infoln("%s --> %v match %s using %s", metadata.SrcIP.String(), metadata.String(), rule.RuleType().String(), rawPc.Chains().String())
-		} else {
-			log.Infoln("%s --> %v doesn't match any rule using DIRECT", metadata.SrcIP.String(), metadata.String())
+		switch mode {
+		case Direct:
+			log.Infoln("[UDP] %s --> %v using DIRECT", metadata.SrcIP.String(), metadata.String())
+		case Global:
+			log.Infoln("[UDP] %s --> %v using %s", metadata.SrcIP.String(), metadata.String(), rawPc.Chains().String())
+		default:
+			if rule != nil {
+				log.Infoln("[UDP] %s --> %v match %s using %s", metadata.SrcIP.String(), metadata.String(), rule.RuleType().String(), rawPc.Chains().String())
+			} else {
+				log.Infoln("[UDP] %s --> %v doesn't match any rule using DIRECT", metadata.SrcIP.String(), metadata.String())
+			}
 		}
 
 		natTable.Set(localConn.RemoteAddr(), pc, addr)
@@ -182,18 +189,25 @@ func (t *Tunnel) handleUDPConn(localConn C.ServerAdapter, metadata *C.Metadata, 
 	t.handleUDPToRemote(localConn, pc, addr)
 }
 
-func (t *Tunnel) handleTCPConn(localConn C.ServerAdapter, metadata *C.Metadata, proxy C.Proxy, rule C.Rule) {
+func (t *Tunnel) handleTCPConn(localConn C.ServerAdapter, metadata *C.Metadata, proxy C.Proxy, mode Mode, rule C.Rule) {
 	remoteConn, err := proxy.Dial(metadata)
 	if err != nil {
-		log.Warnln("dial %s error: %s", proxy.Name(), err.Error())
+		log.Warnln("[TCP] dial %s error: %s", proxy.Name(), err.Error())
 		return
 	}
 	defer remoteConn.Close()
 
-	if rule != nil {
-		log.Infoln("%s --> %v match %s using %s", metadata.SrcIP.String(), metadata.String(), rule.RuleType().String(), remoteConn.Chains().String())
-	} else {
-		log.Infoln("%s --> %v doesn't match any rule using DIRECT", metadata.SrcIP.String(), metadata.String())
+	switch mode {
+	case Direct:
+		log.Infoln("[TCP] %s --> %v using DIRECT", metadata.SrcIP.String(), metadata.String())
+	case Global:
+		log.Infoln("[TCP] %s --> %v using %s", metadata.SrcIP.String(), metadata.String(), remoteConn.Chains().String())
+	default:
+		if rule != nil {
+			log.Infoln("[TCP] %s --> %v match %s using %s", metadata.SrcIP.String(), metadata.String(), rule.RuleType().String(), remoteConn.Chains().String())
+		} else {
+			log.Infoln("[TCP] %s --> %v doesn't match any rule using DIRECT", metadata.SrcIP.String(), metadata.String())
+		}
 	}
 
 	switch adapter := localConn.(type) {
