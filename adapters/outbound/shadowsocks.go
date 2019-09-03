@@ -58,7 +58,7 @@ type v2rayObfsOption struct {
 }
 
 func (ss *ShadowSocks) Dial(metadata *C.Metadata) (C.Conn, error) {
-	c, err := dialTimeout("tcp", ss.server, tcpTimeout)
+	c, err := dialTimeout("tcp", ss.server, tcpTimeout, metadata.LocalAddr)
 	if err != nil {
 		return nil, fmt.Errorf("%s connect error: %s", ss.server, err.Error())
 	}

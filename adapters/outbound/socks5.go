@@ -34,7 +34,7 @@ type Socks5Option struct {
 }
 
 func (ss *Socks5) Dial(metadata *C.Metadata) (C.Conn, error) {
-	c, err := dialTimeout("tcp", ss.addr, tcpTimeout)
+	c, err := dialTimeout("tcp", ss.addr, tcpTimeout, metadata.LocalAddr)
 
 	if err == nil && ss.tls {
 		cc := tls.Client(c, ss.tlsConfig)
@@ -60,7 +60,7 @@ func (ss *Socks5) Dial(metadata *C.Metadata) (C.Conn, error) {
 }
 
 func (ss *Socks5) DialUDP(metadata *C.Metadata) (_ C.PacketConn, _ net.Addr, err error) {
-	c, err := dialTimeout("tcp", ss.addr, tcpTimeout)
+	c, err := dialTimeout("tcp", ss.addr, tcpTimeout, metadata.LocalAddr)
 	if err != nil {
 		err = fmt.Errorf("%s connect error", ss.addr)
 		return

@@ -55,7 +55,7 @@ func GetGeneral() *config.General {
 }
 
 func updateExperimental(c *config.Experimental) {
-	T.Instance().UpdateExperimental(c.IgnoreResolveFail)
+	T.Instance().UpdateExperimental(c.IgnoreResolveFail, c.SendThrough)
 }
 
 func updateDNS(c *config.DNS) {

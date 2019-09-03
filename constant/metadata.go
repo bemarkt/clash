@@ -31,14 +31,15 @@ type Type int
 
 // Metadata is used to store connection address
 type Metadata struct {
-	NetWork  NetWork
-	Type     Type
-	SrcIP    *net.IP
-	DstIP    *net.IP
-	SrcPort  string
-	DstPort  string
-	AddrType int
-	Host     string
+	NetWork   NetWork
+	Type      Type
+	SrcIP     *net.IP
+	DstIP     *net.IP
+	LocalAddr net.Addr
+	SrcPort   string
+	DstPort   string
+	AddrType  int
+	Host      string
 }
 
 func (m *Metadata) String() string {

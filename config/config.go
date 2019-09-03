@@ -52,7 +52,8 @@ type DNS struct {
 
 // Experimental config
 type Experimental struct {
-	IgnoreResolveFail bool `yaml:"ignore-resolve-fail"`
+	IgnoreResolveFail bool   `yaml:"ignore-resolve-fail"`
+	SendThrough       string `yaml:"send-through"`
 }
 
 // Config is clash config manager

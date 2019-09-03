@@ -29,6 +29,7 @@ type Tunnel struct {
 
 	// experimental features
 	ignoreResolveFail bool
+	sendThrough				string
 
 	// Outbound Rule
 	mode Mode
@@ -69,9 +70,10 @@ func (t *Tunnel) UpdateProxies(proxies map[string]C.Proxy) {
 }
 
 // UpdateExperimental handle update experimental config
-func (t *Tunnel) UpdateExperimental(ignoreResolveFail bool) {
+func (t *Tunnel) UpdateExperimental(ignoreResolveFail bool, sendThrough string) {
 	t.configMux.Lock()
 	t.ignoreResolveFail = ignoreResolveFail
+	t.sendThrough = sendThrough
 	t.configMux.Unlock()
 }
 
@@ -131,6 +133,12 @@ func (t *Tunnel) handleConn(localConn C.ServerAdapter) {
 			if dns.DefaultResolver.IsFakeIP() {
 				metadata.DstIP = nil
 			}
+		}
+	}
+
+	if t.sendThrough != "" {
+		if tcpAddr, err := net.ResolveTCPAddr("tcp", t.sendThrough); err == nil {
+			metadata.LocalAddr = tcpAddr
 		}
 	}
 

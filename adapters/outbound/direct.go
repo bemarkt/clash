@@ -16,7 +16,7 @@ func (d *Direct) Dial(metadata *C.Metadata) (C.Conn, error) {
 		address = net.JoinHostPort(metadata.DstIP.String(), metadata.DstPort)
 	}
 
-	c, err := dialTimeout("tcp", address, tcpTimeout)
+	c, err := dialTimeout("tcp", address, tcpTimeout, metadata.LocalAddr)
 	if err != nil {
 		return nil, err
 	}

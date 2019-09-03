@@ -98,7 +98,7 @@ func (fuc *fakeUDPConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	return n, fuc.RemoteAddr(), err
 }
 
-func dialTimeout(network, address string, timeout time.Duration) (net.Conn, error) {
+func dialTimeout(network, address string, timeout time.Duration, localAddr net.Addr) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -109,7 +109,11 @@ func dialTimeout(network, address string, timeout time.Duration) (net.Conn, erro
 		return nil, err
 	}
 
-	return net.DialTimeout(network, net.JoinHostPort(ip.String(), port), timeout)
+	dialer := net.Dialer{Timeout: timeout}
+	if localAddr != nil {
+		dialer.LocalAddr = localAddr
+	}
+	return dialer.Dial(network, net.JoinHostPort(ip.String(), port))
 }
 
 func resolveUDPAddr(network, address string) (*net.UDPAddr, error) {
