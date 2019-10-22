@@ -8,6 +8,7 @@ const (
 	GEOIP
 	IPCIDR
 	SrcIPCIDR
+	HostIPCIDR
 	SrcPort
 	DstPort
 	MATCH
@@ -31,6 +32,8 @@ func (rt RuleType) String() string {
 		return "SrcIPCIDR"
 	case SrcPort:
 		return "SrcPort"
+	case HostIPCIDR:
+		return "HostIPCIDR"
 	case DstPort:
 		return "DstPort"
 	case MATCH:

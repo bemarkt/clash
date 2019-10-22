@@ -454,6 +454,10 @@ func parseRules(cfg *rawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 			parsed = R.NewDomainKeyword(payload, target)
 		case "GEOIP":
 			parsed = R.NewGEOIP(payload, target)
+		case "Host-IP-CIDR":
+			if rule := R.NewHostIPCIDR(payload, target); rule != nil {
+				parsed = rule
+			}
 		case "IP-CIDR", "IP-CIDR6":
 			if rule := R.NewIPCIDR(payload, target, false); rule != nil {
 				parsed = rule
