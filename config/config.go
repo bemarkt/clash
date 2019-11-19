@@ -462,6 +462,8 @@ func parseRules(cfg *rawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 			parsed = R.NewDomainSuffix(payload, target)
 		case "DOMAIN-KEYWORD":
 			parsed = R.NewDomainKeyword(payload, target)
+		case "RULE-SET":
+			parsed = R.NewRuleset(payload, target)
 		case "GEOIP":
 			noResolve := R.HasNoResolve(params)
 			parsed = R.NewGEOIP(payload, target, noResolve)
