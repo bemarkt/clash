@@ -6,17 +6,14 @@ import (
 	"errors"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Dreamacro/clash/common/cache"
 	"github.com/Dreamacro/clash/common/picker"
 	trie "github.com/Dreamacro/clash/component/domain-trie"
 	"github.com/Dreamacro/clash/component/fakeip"
-	C "github.com/Dreamacro/clash/constant"
 
 	D "github.com/miekg/dns"
-	geoip2 "github.com/oschwald/geoip2-golang"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -30,9 +27,6 @@ var (
 
 var (
 	globalSessionCache = tls.NewLRUClientSessionCache(64)
-
-	mmdb *geoip2.Reader
-	once sync.Once
 )
 
 type resolver interface {
@@ -166,12 +160,21 @@ func (r *Resolver) IsMapping() bool {
 	return r.mapping
 }
 
-func (r *Resolver) IsFakeIP() bool {
+// FakeIPEnabled returns if fake-ip is enabled
+func (r *Resolver) FakeIPEnabled() bool {
 	return r.fakeip
 }
 
+// IsFakeIP determine if given ip is a fake-ip
+func (r *Resolver) IsFakeIP(ip net.IP) bool {
+	if r.FakeIPEnabled() {
+		return r.pool.Exist(ip)
+	}
+	return false
+}
+
 func (r *Resolver) batchExchange(clients []resolver, m *D.Msg) (msg *D.Msg, err error) {
-	fast, ctx := picker.WithTimeout(context.Background(), time.Second)
+	fast, ctx := picker.WithTimeout(context.Background(), time.Second*5)
 	for _, client := range clients {
 		r := client
 		fast.Go(func() (interface{}, error) {
@@ -183,7 +186,7 @@ func (r *Resolver) batchExchange(clients []resolver, m *D.Msg) (msg *D.Msg, err 
 		})
 	}
 
-	elm := fast.Wait()
+	elm := fast.WaitWithoutCancel()
 	if elm == nil {
 		return nil, errors.New("All DNS requests failed")
 	}
@@ -302,10 +305,6 @@ func New(config Config) *Resolver {
 
 	fallbackFilters := []fallbackFilter{}
 	if config.FallbackFilter.GeoIP {
-		once.Do(func() {
-			mmdb, _ = geoip2.Open(C.Path.MMDB())
-		})
-
 		fallbackFilters = append(fallbackFilters, &geoipFilter{})
 	}
 	for _, ipnet := range config.FallbackFilter.IPCIDR {

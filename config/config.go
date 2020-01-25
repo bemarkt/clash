@@ -2,15 +2,14 @@ package config
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
-	adapters "github.com/Dreamacro/clash/adapters/outbound"
-	"github.com/Dreamacro/clash/common/structure"
+	"github.com/Dreamacro/clash/adapters/outbound"
+	"github.com/Dreamacro/clash/adapters/outboundgroup"
+	"github.com/Dreamacro/clash/adapters/provider"
 	"github.com/Dreamacro/clash/component/auth"
 	trie "github.com/Dreamacro/clash/component/domain-trie"
 	"github.com/Dreamacro/clash/component/fakeip"
@@ -70,25 +69,27 @@ type Config struct {
 	Rules        []C.Rule
 	Users        []auth.AuthUser
 	Proxies      map[string]C.Proxy
+	Providers    map[string]provider.ProxyProvider
 }
 
-type rawDNS struct {
+type RawDNS struct {
 	Enable         bool              `yaml:"enable"`
 	IPv6           bool              `yaml:"ipv6"`
 	NameServer     []string          `yaml:"nameserver"`
 	Fallback       []string          `yaml:"fallback"`
-	FallbackFilter rawFallbackFilter `yaml:"fallback-filter"`
+	FallbackFilter RawFallbackFilter `yaml:"fallback-filter"`
 	Listen         string            `yaml:"listen"`
 	EnhancedMode   dns.EnhancedMode  `yaml:"enhanced-mode"`
 	FakeIPRange    string            `yaml:"fake-ip-range"`
+	FakeIPFilter   []string          `yaml:"fake-ip-filter"`
 }
 
-type rawFallbackFilter struct {
+type RawFallbackFilter struct {
 	GeoIP  bool     `yaml:"geoip"`
 	IPCIDR []string `yaml:"ipcidr"`
 }
 
-type rawConfig struct {
+type RawConfig struct {
 	Port               int          `yaml:"port"`
 	SocksPort          int          `yaml:"socks-port"`
 	RedirPort          int          `yaml:"redir-port"`
@@ -101,48 +102,28 @@ type rawConfig struct {
 	ExternalUI         string       `yaml:"external-ui"`
 	Secret             string       `yaml:"secret"`
 
-	Hosts        map[string]string        `yaml:"hosts"`
-	DNS          rawDNS                   `yaml:"dns"`
-	Experimental Experimental             `yaml:"experimental"`
-	Proxy        []map[string]interface{} `yaml:"Proxy"`
-	ProxyGroup   []map[string]interface{} `yaml:"Proxy Group"`
-	Rule         []string                 `yaml:"Rule"`
+	ProxyProvider map[string]map[string]interface{} `yaml:"proxy-provider"`
+	Hosts         map[string]string                 `yaml:"hosts"`
+	DNS           RawDNS                            `yaml:"dns"`
+	Experimental  Experimental                      `yaml:"experimental"`
+	Proxy         []map[string]interface{}          `yaml:"Proxy"`
+	ProxyGroup    []map[string]interface{}          `yaml:"Proxy Group"`
+	Rule          []string                          `yaml:"Rule"`
 }
 
-// forward compatibility before 1.0
-func readRawConfig(path string) ([]byte, error) {
-	data, err := ioutil.ReadFile(path)
-	if err == nil && len(data) != 0 {
-		return data, nil
-	}
-
-	if filepath.Ext(path) != ".yaml" {
-		return nil, err
-	}
-
-	path = path[:len(path)-5] + ".yml"
-	if _, err = os.Stat(path); err == nil {
-		return ioutil.ReadFile(path)
-	}
-
-	return data, nil
-}
-
-func readConfig(path string) (*rawConfig, error) {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, err
-	}
-	data, err := readRawConfig(path)
+// Parse config
+func Parse(buf []byte) (*Config, error) {
+	rawCfg, err := UnmarshalRawConfig(buf)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(data) == 0 {
-		return nil, fmt.Errorf("Configuration file %s is empty", path)
-	}
+	return ParseRawConfig(rawCfg)
+}
 
+func UnmarshalRawConfig(buf []byte) (*RawConfig, error) {
 	// config with some default value
-	rawConfig := &rawConfig{
+	rawCfg := &RawConfig{
 		AllowLan:       false,
 		BindAddress:    "*",
 		Mode:           T.Rule,
@@ -155,27 +136,26 @@ func readConfig(path string) (*rawConfig, error) {
 		Experimental: Experimental{
 			IgnoreResolveFail: true,
 		},
-		DNS: rawDNS{
+		DNS: RawDNS{
 			Enable:      false,
 			FakeIPRange: "198.18.0.1/16",
-			FallbackFilter: rawFallbackFilter{
+			FallbackFilter: RawFallbackFilter{
 				GeoIP:  true,
 				IPCIDR: []string{},
 			},
 		},
 	}
-	err = yaml.Unmarshal([]byte(data), &rawConfig)
-	return rawConfig, err
-}
 
-// Parse config
-func Parse(path string) (*Config, error) {
-	config := &Config{}
-
-	rawCfg, err := readConfig(path)
-	if err != nil {
+	if err := yaml.Unmarshal(buf, &rawCfg); err != nil {
 		return nil, err
 	}
+
+	return rawCfg, nil
+}
+
+func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
+	config := &Config{}
+
 	config.Experimental = &rawCfg.Experimental
 
 	general, err := parseGeneral(rawCfg)
@@ -184,11 +164,12 @@ func Parse(path string) (*Config, error) {
 	}
 	config.General = general
 
-	proxies, err := parseProxies(rawCfg)
+	proxies, providers, err := parseProxies(rawCfg)
 	if err != nil {
 		return nil, err
 	}
 	config.Proxies = proxies
+	config.Providers = providers
 
 	rules, err := parseRules(rawCfg, proxies)
 	if err != nil {
@@ -213,7 +194,7 @@ func Parse(path string) (*Config, error) {
 	return config, nil
 }
 
-func parseGeneral(cfg *rawConfig) (*General, error) {
+func parseGeneral(cfg *RawConfig) (*General, error) {
 	port := cfg.Port
 	socksPort := cfg.SocksPort
 	redirPort := cfg.RedirPort
@@ -226,9 +207,7 @@ func parseGeneral(cfg *rawConfig) (*General, error) {
 	logLevel := cfg.LogLevel
 
 	if externalUI != "" {
-		if !filepath.IsAbs(externalUI) {
-			externalUI = filepath.Join(C.Path.HomeDir(), externalUI)
-		}
+		externalUI = C.Path.Reslove(externalUI)
 
 		if _, err := os.Stat(externalUI); os.IsNotExist(err) {
 			return nil, fmt.Errorf("external-ui: %s not exist", externalUI)
@@ -250,75 +229,38 @@ func parseGeneral(cfg *rawConfig) (*General, error) {
 	return general, nil
 }
 
-func parseProxies(cfg *rawConfig) (map[string]C.Proxy, error) {
-	proxies := make(map[string]C.Proxy)
+func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[string]provider.ProxyProvider, err error) {
+	proxies = make(map[string]C.Proxy)
+	providersMap = make(map[string]provider.ProxyProvider)
 	proxyList := []string{}
 	proxiesConfig := cfg.Proxy
 	groupsConfig := cfg.ProxyGroup
+	providersConfig := cfg.ProxyProvider
 
-	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true})
+	defer func() {
+		// Destroy already created provider when err != nil
+		if err != nil {
+			for _, provider := range providersMap {
+				provider.Destroy()
+			}
+		}
+	}()
 
-	proxies["DIRECT"] = adapters.NewProxy(adapters.NewDirect())
-	proxies["REJECT"] = adapters.NewProxy(adapters.NewReject())
+	proxies["DIRECT"] = outbound.NewProxy(outbound.NewDirect())
+	proxies["REJECT"] = outbound.NewProxy(outbound.NewReject())
 	proxyList = append(proxyList, "DIRECT", "REJECT")
 
 	// parse proxy
 	for idx, mapping := range proxiesConfig {
-		proxyType, existType := mapping["type"].(string)
-		if !existType {
-			return nil, fmt.Errorf("Proxy %d missing type", idx)
-		}
-
-		var proxy C.ProxyAdapter
-		err := fmt.Errorf("cannot parse")
-		switch proxyType {
-		case "ss":
-			ssOption := &adapters.ShadowSocksOption{}
-			err = decoder.Decode(mapping, ssOption)
-			if err != nil {
-				break
-			}
-			proxy, err = adapters.NewShadowSocks(*ssOption)
-		case "socks5":
-			socksOption := &adapters.Socks5Option{}
-			err = decoder.Decode(mapping, socksOption)
-			if err != nil {
-				break
-			}
-			proxy = adapters.NewSocks5(*socksOption)
-		case "http":
-			httpOption := &adapters.HttpOption{}
-			err = decoder.Decode(mapping, httpOption)
-			if err != nil {
-				break
-			}
-			proxy = adapters.NewHttp(*httpOption)
-		case "vmess":
-			vmessOption := &adapters.VmessOption{}
-			err = decoder.Decode(mapping, vmessOption)
-			if err != nil {
-				break
-			}
-			proxy, err = adapters.NewVmess(*vmessOption)
-		case "snell":
-			snellOption := &adapters.SnellOption{}
-			err = decoder.Decode(mapping, snellOption)
-			if err != nil {
-				break
-			}
-			proxy, err = adapters.NewSnell(*snellOption)
-		default:
-			return nil, fmt.Errorf("Unsupport proxy type: %s", proxyType)
-		}
-
+		proxy, err := outbound.ParseProxy(mapping)
 		if err != nil {
-			return nil, fmt.Errorf("Proxy [%d]: %s", idx, err.Error())
+			return nil, nil, fmt.Errorf("Proxy %d: %w", idx, err)
 		}
 
 		if _, exist := proxies[proxy.Name()]; exist {
-			return nil, fmt.Errorf("Proxy %s is the duplicate name", proxy.Name())
+			return nil, nil, fmt.Errorf("Proxy %s is the duplicate name", proxy.Name())
 		}
-		proxies[proxy.Name()] = adapters.NewProxy(proxy)
+		proxies[proxy.Name()] = proxy
 		proxyList = append(proxyList, proxy.Name())
 	}
 
@@ -326,98 +268,78 @@ func parseProxies(cfg *rawConfig) (map[string]C.Proxy, error) {
 	for idx, mapping := range groupsConfig {
 		groupName, existName := mapping["name"].(string)
 		if !existName {
-			return nil, fmt.Errorf("ProxyGroup %d: missing name", idx)
+			return nil, nil, fmt.Errorf("ProxyGroup %d: missing name", idx)
 		}
 		proxyList = append(proxyList, groupName)
 	}
 
 	// check if any loop exists and sort the ProxyGroups
-	if err := proxyGroupsDagSort(groupsConfig, decoder); err != nil {
-		return nil, err
+	if err := proxyGroupsDagSort(groupsConfig); err != nil {
+		return nil, nil, err
+	}
+
+	// parse and initial providers
+	for name, mapping := range providersConfig {
+		if name == provider.ReservedName {
+			return nil, nil, fmt.Errorf("can not defined a provider called `%s`", provider.ReservedName)
+		}
+
+		pd, err := provider.ParseProxyProvider(name, mapping)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		providersMap[name] = pd
+	}
+
+	for _, provider := range providersMap {
+		log.Infoln("Start initial provider %s", provider.Name())
+		if err := provider.Initial(); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// parse proxy group
-	for _, mapping := range groupsConfig {
-		groupType, existType := mapping["type"].(string)
-		groupName, _ := mapping["name"].(string)
-		if !existType {
-			return nil, fmt.Errorf("ProxyGroup %s: missing type", groupName)
-		}
-
-		if _, exist := proxies[groupName]; exist {
-			return nil, fmt.Errorf("ProxyGroup %s: the duplicate name", groupName)
-		}
-		var group C.ProxyAdapter
-		ps := []C.Proxy{}
-
-		err := fmt.Errorf("cannot parse")
-		switch groupType {
-		case "url-test":
-			urlTestOption := &adapters.URLTestOption{}
-			err = decoder.Decode(mapping, urlTestOption)
-			if err != nil {
-				break
-			}
-
-			ps, err = getProxies(proxies, urlTestOption.Proxies)
-			if err != nil {
-				return nil, fmt.Errorf("ProxyGroup %s: %s", groupName, err.Error())
-			}
-			group, err = adapters.NewURLTest(*urlTestOption, ps)
-		case "select":
-			selectorOption := &adapters.SelectorOption{}
-			err = decoder.Decode(mapping, selectorOption)
-			if err != nil {
-				break
-			}
-
-			ps, err = getProxies(proxies, selectorOption.Proxies)
-			if err != nil {
-				return nil, fmt.Errorf("ProxyGroup %s: %s", groupName, err.Error())
-			}
-			group, err = adapters.NewSelector(selectorOption.Name, ps)
-		case "fallback":
-			fallbackOption := &adapters.FallbackOption{}
-			err = decoder.Decode(mapping, fallbackOption)
-			if err != nil {
-				break
-			}
-
-			ps, err = getProxies(proxies, fallbackOption.Proxies)
-			if err != nil {
-				return nil, fmt.Errorf("ProxyGroup %s: %s", groupName, err.Error())
-			}
-			group, err = adapters.NewFallback(*fallbackOption, ps)
-		case "load-balance":
-			loadBalanceOption := &adapters.LoadBalanceOption{}
-			err = decoder.Decode(mapping, loadBalanceOption)
-			if err != nil {
-				break
-			}
-
-			ps, err = getProxies(proxies, loadBalanceOption.Proxies)
-			if err != nil {
-				return nil, fmt.Errorf("ProxyGroup %s: %s", groupName, err.Error())
-			}
-			group, err = adapters.NewLoadBalance(*loadBalanceOption, ps)
-		}
+	for idx, mapping := range groupsConfig {
+		group, err := outboundgroup.ParseProxyGroup(mapping, proxies, providersMap)
 		if err != nil {
-			return nil, fmt.Errorf("Proxy %s: %s", groupName, err.Error())
+			return nil, nil, fmt.Errorf("ProxyGroup[%d]: %w", idx, err)
 		}
-		proxies[groupName] = adapters.NewProxy(group)
+
+		groupName := group.Name()
+		if _, exist := proxies[groupName]; exist {
+			return nil, nil, fmt.Errorf("ProxyGroup %s: the duplicate name", groupName)
+		}
+
+		proxies[groupName] = outbound.NewProxy(group)
+	}
+
+	// initial compatible provider
+	for _, pd := range providersMap {
+		if pd.VehicleType() != provider.Compatible {
+			continue
+		}
+
+		log.Infoln("Start initial compatible provider %s", pd.Name())
+		if err := pd.Initial(); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	ps := []C.Proxy{}
 	for _, v := range proxyList {
 		ps = append(ps, proxies[v])
 	}
+	hc := provider.NewHealthCheck(ps, "", 0)
+	pd, _ := provider.NewCompatibleProvider(provider.ReservedName, ps, hc)
+	providersMap[provider.ReservedName] = pd
 
-	global, _ := adapters.NewSelector("GLOBAL", ps)
-	proxies["GLOBAL"] = adapters.NewProxy(global)
-	return proxies, nil
+	global := outboundgroup.NewSelector("GLOBAL", []provider.ProxyProvider{pd})
+	proxies["GLOBAL"] = outbound.NewProxy(global)
+	return proxies, providersMap, nil
 }
 
-func parseRules(cfg *rawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
+func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 	rules := []C.Rule{}
 
 	rulesConfig := cfg.Rule
@@ -496,7 +418,7 @@ func parseRules(cfg *rawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 	return rules, nil
 }
 
-func parseHosts(cfg *rawConfig) (*trie.Trie, error) {
+func parseHosts(cfg *RawConfig) (*trie.Trie, error) {
 	tree := trie.New()
 	if len(cfg.Hosts) != 0 {
 		for domain, ipStr := range cfg.Hosts {
@@ -589,7 +511,7 @@ func parseFallbackIPCIDR(ips []string) ([]*net.IPNet, error) {
 	return ipNets, nil
 }
 
-func parseDNS(cfg rawDNS) (*DNS, error) {
+func parseDNS(cfg RawDNS) (*DNS, error) {
 	if cfg.Enable && len(cfg.NameServer) == 0 {
 		return nil, fmt.Errorf("If DNS configuration is turned on, NameServer cannot be empty")
 	}
@@ -617,7 +539,17 @@ func parseDNS(cfg rawDNS) (*DNS, error) {
 		if err != nil {
 			return nil, err
 		}
-		pool, err := fakeip.New(ipnet, 1000)
+
+		var host *trie.Trie
+		// fake ip skip host filter
+		if len(cfg.FakeIPFilter) != 0 {
+			host = trie.New()
+			for _, domain := range cfg.FakeIPFilter {
+				host.Insert(domain, true)
+			}
+		}
+
+		pool, err := fakeip.New(ipnet, 1000, host)
 		if err != nil {
 			return nil, err
 		}
