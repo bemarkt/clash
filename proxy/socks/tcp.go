@@ -1,18 +1,16 @@
 package socks
 
 import (
+	"io"
+	"io/ioutil"
 	"net"
 
-	"github.com/Dreamacro/clash/adapters/inbound"
+	adapters "github.com/Dreamacro/clash/adapters/inbound"
+	"github.com/Dreamacro/clash/component/socks5"
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/log"
+	authStore "github.com/Dreamacro/clash/proxy/auth"
 	"github.com/Dreamacro/clash/tunnel"
-
-	"github.com/Dreamacro/go-shadowsocks2/socks"
-)
-
-var (
-	tun = tunnel.Instance()
 )
 
 type SockListener struct {
@@ -55,11 +53,16 @@ func (l *SockListener) Address() string {
 }
 
 func handleSocks(conn net.Conn) {
-	target, err := socks.Handshake(conn)
+	target, command, err := socks5.ServerHandshake(conn, authStore.Authenticator())
 	if err != nil {
 		conn.Close()
 		return
 	}
 	conn.(*net.TCPConn).SetKeepAlive(true)
-	tun.Add(adapters.NewSocket(target, conn, C.SOCKS))
+	if command == socks5.CmdUDPAssociate {
+		defer conn.Close()
+		io.Copy(ioutil.Discard, conn)
+		return
+	}
+	tunnel.Add(adapters.NewSocket(target, conn, C.SOCKS, C.TCP))
 }

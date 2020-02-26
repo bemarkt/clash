@@ -9,31 +9,38 @@ import (
 var (
 	address string
 	server  = &Server{}
+
+	dnsDefaultTTL uint32 = 600
 )
 
 type Server struct {
 	*D.Server
-	r *Resolver
+	handler handler
 }
 
 func (s *Server) ServeDNS(w D.ResponseWriter, r *D.Msg) {
-	msg, err := s.r.Exchange(r)
-
-	if err != nil {
+	if len(r.Question) == 0 {
 		D.HandleFailed(w, r)
 		return
 	}
-	msg.SetReply(r)
-	w.WriteMsg(msg)
+
+	s.handler(w, r)
+}
+
+func (s *Server) setHandler(handler handler) {
+	s.handler = handler
 }
 
 func ReCreateServer(addr string, resolver *Resolver) error {
-	if server.Server != nil {
-		server.Shutdown()
+	if addr == address && resolver != nil {
+		handler := newHandler(resolver)
+		server.setHandler(handler)
+		return nil
 	}
 
-	if addr == address {
-		return nil
+	if server.Server != nil {
+		server.Shutdown()
+		address = ""
 	}
 
 	_, port, err := net.SplitHostPort(addr)
@@ -52,7 +59,8 @@ func ReCreateServer(addr string, resolver *Resolver) error {
 	}
 
 	address = addr
-	server = &Server{r: resolver}
+	handler := newHandler(resolver)
+	server = &Server{handler: handler}
 	server.Server = &D.Server{Addr: addr, PacketConn: p, Handler: server}
 
 	go func() {

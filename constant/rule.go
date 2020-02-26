@@ -7,8 +7,10 @@ const (
 	DomainKeyword
 	GEOIP
 	IPCIDR
-	SourceIPCIDR
-	FINAL
+	SrcIPCIDR
+	SrcPort
+	DstPort
+	MATCH
 )
 
 type RuleType int
@@ -22,21 +24,26 @@ func (rt RuleType) String() string {
 	case DomainKeyword:
 		return "DomainKeyword"
 	case GEOIP:
-		return "GEOIP"
+		return "GeoIP"
 	case IPCIDR:
 		return "IPCIDR"
-	case SourceIPCIDR:
-		return "SourceIPCIDR"
-	case FINAL:
-		return "FINAL"
+	case SrcIPCIDR:
+		return "SrcIPCIDR"
+	case SrcPort:
+		return "SrcPort"
+	case DstPort:
+		return "DstPort"
+	case MATCH:
+		return "Match"
 	default:
-		return "Unknow"
+		return "Unknown"
 	}
 }
 
 type Rule interface {
 	RuleType() RuleType
-	IsMatch(metadata *Metadata) bool
+	Match(metadata *Metadata) bool
 	Adapter() string
 	Payload() string
+	NoResolveIP() bool
 }

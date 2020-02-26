@@ -1,17 +1,17 @@
-package adapters
+package outbound
 
 import (
-	"bytes"
+	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"strconv"
 
+	"github.com/Dreamacro/clash/component/dialer"
+	"github.com/Dreamacro/clash/component/socks5"
 	C "github.com/Dreamacro/clash/constant"
-
-	"github.com/Dreamacro/go-shadowsocks2/socks"
 )
 
 type Socks5 struct {
@@ -31,11 +31,12 @@ type Socks5Option struct {
 	UserName       string `proxy:"username,omitempty"`
 	Password       string `proxy:"password,omitempty"`
 	TLS            bool   `proxy:"tls,omitempty"`
+	UDP            bool   `proxy:"udp,omitempty"`
 	SkipCertVerify bool   `proxy:"skip-cert-verify,omitempty"`
 }
 
-func (ss *Socks5) Generator(metadata *C.Metadata) (net.Conn, error) {
-	c, err := net.DialTimeout("tcp", ss.addr, tcpTimeout)
+func (ss *Socks5) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
+	c, err := dialer.DialContext(ctx, "tcp", ss.addr)
 
 	if err == nil && ss.tls {
 		cc := tls.Client(c, ss.tlsConfig)
@@ -44,72 +45,72 @@ func (ss *Socks5) Generator(metadata *C.Metadata) (net.Conn, error) {
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("%s connect error", ss.addr)
+		return nil, fmt.Errorf("%s connect error: %w", ss.addr, err)
 	}
 	tcpKeepAlive(c)
-	if err := ss.shakeHand(metadata, c); err != nil {
+	var user *socks5.User
+	if ss.user != "" {
+		user = &socks5.User{
+			Username: ss.user,
+			Password: ss.pass,
+		}
+	}
+	if _, err := socks5.ClientHandshake(c, serializesSocksAddr(metadata), socks5.CmdConnect, user); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return newConn(c, ss), nil
 }
 
-func (ss *Socks5) shakeHand(metadata *C.Metadata, rw io.ReadWriter) error {
-	buf := make([]byte, socks.MaxAddrLen)
-	var err error
-
-	// VER, NMETHODS, METHODS
-	if len(ss.user) > 0 {
-		_, err = rw.Write([]byte{5, 1, 2})
-	} else {
-		_, err = rw.Write([]byte{5, 1, 0})
-	}
+func (ss *Socks5) DialUDP(metadata *C.Metadata) (_ C.PacketConn, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), tcpTimeout)
+	defer cancel()
+	c, err := dialer.DialContext(ctx, "tcp", ss.addr)
 	if err != nil {
-		return err
+		err = fmt.Errorf("%s connect error: %w", ss.addr, err)
+		return
 	}
 
-	// VER, METHOD
-	if _, err := io.ReadFull(rw, buf[:2]); err != nil {
-		return err
+	if ss.tls {
+		cc := tls.Client(c, ss.tlsConfig)
+		err = cc.Handshake()
+		c = cc
 	}
 
-	if buf[0] != 5 {
-		return errors.New("SOCKS version error")
-	}
-
-	if buf[1] == 2 {
-		// password protocol version
-		authMsg := &bytes.Buffer{}
-		authMsg.WriteByte(1)
-		authMsg.WriteByte(uint8(len(ss.user)))
-		authMsg.WriteString(ss.user)
-		authMsg.WriteByte(uint8(len(ss.pass)))
-		authMsg.WriteString(ss.pass)
-
-		if _, err := rw.Write(authMsg.Bytes()); err != nil {
-			return err
+	defer func() {
+		if err != nil {
+			c.Close()
 		}
+	}()
 
-		if _, err := io.ReadFull(rw, buf[:2]); err != nil {
-			return err
+	tcpKeepAlive(c)
+	var user *socks5.User
+	if ss.user != "" {
+		user = &socks5.User{
+			Username: ss.user,
+			Password: ss.pass,
 		}
-
-		if buf[1] != 0 {
-			return errors.New("rejected username/password")
-		}
-	} else if buf[1] != 0 {
-		return errors.New("SOCKS need auth")
 	}
 
-	// VER, CMD, RSV, ADDR
-	if _, err := rw.Write(bytes.Join([][]byte{{5, 1, 0}, serializesSocksAddr(metadata)}, []byte(""))); err != nil {
-		return err
+	bindAddr, err := socks5.ClientHandshake(c, serializesSocksAddr(metadata), socks5.CmdUDPAssociate, user)
+	if err != nil {
+		err = fmt.Errorf("client hanshake error: %w", err)
+		return
 	}
 
-	if _, err := io.ReadFull(rw, buf[:10]); err != nil {
-		return err
+	pc, err := dialer.ListenPacket("udp", "")
+	if err != nil {
+		return
 	}
 
-	return nil
+	go func() {
+		io.Copy(ioutil.Discard, c)
+		c.Close()
+		// A UDP association terminates when the TCP connection that the UDP
+		// ASSOCIATE request arrived on terminates. RFC1928
+		pc.Close()
+	}()
+
+	return newPacketConn(&socksPacketConn{PacketConn: pc, rAddr: bindAddr.UDPAddr(), tcpConn: c}, ss), nil
 }
 
 func NewSocks5(option Socks5Option) *Socks5 {
@@ -118,8 +119,6 @@ func NewSocks5(option Socks5Option) *Socks5 {
 		tlsConfig = &tls.Config{
 			InsecureSkipVerify: option.SkipCertVerify,
 			ClientSessionCache: getClientSessionCache(),
-			MinVersion:         tls.VersionTLS11,
-			MaxVersion:         tls.VersionTLS12,
 			ServerName:         option.Server,
 		}
 	}
@@ -128,6 +127,7 @@ func NewSocks5(option Socks5Option) *Socks5 {
 		Base: &Base{
 			name: option.Name,
 			tp:   C.Socks5,
+			udp:  option.UDP,
 		},
 		addr:           net.JoinHostPort(option.Server, strconv.Itoa(option.Port)),
 		user:           option.UserName,
@@ -136,4 +136,46 @@ func NewSocks5(option Socks5Option) *Socks5 {
 		skipCertVerify: option.SkipCertVerify,
 		tlsConfig:      tlsConfig,
 	}
+}
+
+type socksPacketConn struct {
+	net.PacketConn
+	rAddr   net.Addr
+	tcpConn net.Conn
+}
+
+func (uc *socksPacketConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
+	packet, err := socks5.EncodeUDPPacket(socks5.ParseAddrToSocksAddr(addr), b)
+	if err != nil {
+		return
+	}
+	return uc.PacketConn.WriteTo(packet, uc.rAddr)
+}
+
+func (uc *socksPacketConn) WriteWithMetadata(p []byte, metadata *C.Metadata) (n int, err error) {
+	packet, err := socks5.EncodeUDPPacket(socks5.ParseAddr(metadata.RemoteAddress()), p)
+	if err != nil {
+		return
+	}
+	return uc.PacketConn.WriteTo(packet, uc.rAddr)
+}
+
+func (uc *socksPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, a, e := uc.PacketConn.ReadFrom(b)
+	if e != nil {
+		return 0, nil, e
+	}
+	addr, payload, err := socks5.DecodeUDPPacket(b)
+	if err != nil {
+		return 0, nil, err
+	}
+	// due to DecodeUDPPacket is mutable, record addr length
+	addrLength := len(addr)
+	copy(b, payload)
+	return n - addrLength - 3, a, nil
+}
+
+func (uc *socksPacketConn) Close() error {
+	uc.tcpConn.Close()
+	return uc.PacketConn.Close()
 }

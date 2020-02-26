@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/http"
 	"runtime"
 	"sync"
 
@@ -57,6 +58,7 @@ const (
 
 // DstAddr store destination address
 type DstAddr struct {
+	UDP      bool
 	AddrType byte
 	Addr     []byte
 	Port     uint
@@ -85,7 +87,7 @@ type Config struct {
 	WebSocketPath    string
 	WebSocketHeaders map[string]string
 	SkipCertVerify   bool
-	SessionCacahe    tls.ClientSessionCache
+	SessionCache     tls.ClientSessionCache
 }
 
 // New return a Conn with net.Conn and DstAddr
@@ -131,6 +133,11 @@ func NewClient(config Config) (*Client, error) {
 		return nil, fmt.Errorf("Unknown network type: %s", config.NetWork)
 	}
 
+	header := http.Header{}
+	for k, v := range config.WebSocketHeaders {
+		header.Add(k, v)
+	}
+
 	host := net.JoinHostPort(config.HostName, config.Port)
 
 	var tlsConfig *tls.Config
@@ -138,10 +145,13 @@ func NewClient(config Config) (*Client, error) {
 		tlsConfig = &tls.Config{
 			ServerName:         config.HostName,
 			InsecureSkipVerify: config.SkipCertVerify,
-			ClientSessionCache: config.SessionCacahe,
+			ClientSessionCache: config.SessionCache,
 		}
 		if tlsConfig.ClientSessionCache == nil {
 			tlsConfig.ClientSessionCache = getClientSessionCache()
+		}
+		if host := header.Get("Host"); host != "" {
+			tlsConfig.ServerName = host
 		}
 	}
 
@@ -150,7 +160,7 @@ func NewClient(config Config) (*Client, error) {
 		wsConfig = &WebsocketConfig{
 			Host:      host,
 			Path:      config.WebSocketPath,
-			Headers:   config.WebSocketHeaders,
+			Headers:   header,
 			TLS:       config.TLS,
 			TLSConfig: tlsConfig,
 		}

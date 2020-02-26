@@ -1,14 +1,17 @@
-package adapters
+package outbound
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/Dreamacro/clash/component/resolver"
+	"github.com/Dreamacro/clash/component/socks5"
 	C "github.com/Dreamacro/clash/constant"
 )
 
@@ -21,39 +24,6 @@ var (
 	once                     sync.Once
 )
 
-// DelayTest get the delay for the specified URL
-func DelayTest(proxy C.Proxy, url string) (t int16, err error) {
-	addr, err := urlToMetadata(url)
-	if err != nil {
-		return
-	}
-
-	start := time.Now()
-	instance, err := proxy.Generator(&addr)
-	if err != nil {
-		return
-	}
-	defer instance.Close()
-	transport := &http.Transport{
-		Dial: func(string, string) (net.Conn, error) {
-			return instance, nil
-		},
-		// from http.DefaultTransport
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	client := http.Client{Transport: transport}
-	resp, err := client.Get(url)
-	if err != nil {
-		return
-	}
-	resp.Body.Close()
-	t = int16(time.Since(start) / time.Millisecond)
-	return
-}
-
 func urlToMetadata(rawURL string) (addr C.Metadata, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -62,11 +32,12 @@ func urlToMetadata(rawURL string) (addr C.Metadata, err error) {
 
 	port := u.Port()
 	if port == "" {
-		if u.Scheme == "https" {
+		switch u.Scheme {
+		case "https":
 			port = "443"
-		} else if u.Scheme == "http" {
+		case "http":
 			port = "80"
-		} else {
+		default:
 			err = fmt.Errorf("%s scheme not Support", rawURL)
 			return
 		}
@@ -75,25 +46,10 @@ func urlToMetadata(rawURL string) (addr C.Metadata, err error) {
 	addr = C.Metadata{
 		AddrType: C.AtypDomainName,
 		Host:     u.Hostname(),
-		IP:       nil,
-		Port:     port,
+		DstIP:    nil,
+		DstPort:  port,
 	}
 	return
-}
-
-func selectFast(in chan interface{}) chan interface{} {
-	out := make(chan interface{})
-	go func() {
-		p, open := <-in
-		if open {
-			out <- p
-		}
-		close(out)
-		for range in {
-		}
-	}()
-
-	return out
 }
 
 func tcpKeepAlive(c net.Conn) {
@@ -108,4 +64,37 @@ func getClientSessionCache() tls.ClientSessionCache {
 		globalClientSessionCache = tls.NewLRUClientSessionCache(128)
 	})
 	return globalClientSessionCache
+}
+
+func serializesSocksAddr(metadata *C.Metadata) []byte {
+	var buf [][]byte
+	aType := uint8(metadata.AddrType)
+	p, _ := strconv.Atoi(metadata.DstPort)
+	port := []byte{uint8(p >> 8), uint8(p & 0xff)}
+	switch metadata.AddrType {
+	case socks5.AtypDomainName:
+		len := uint8(len(metadata.Host))
+		host := []byte(metadata.Host)
+		buf = [][]byte{{aType, len}, host, port}
+	case socks5.AtypIPv4:
+		host := metadata.DstIP.To4()
+		buf = [][]byte{{aType}, host, port}
+	case socks5.AtypIPv6:
+		host := metadata.DstIP.To16()
+		buf = [][]byte{{aType}, host, port}
+	}
+	return bytes.Join(buf, nil)
+}
+
+func resolveUDPAddr(network, address string) (*net.UDPAddr, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+
+	ip, err := resolver.ResolveIP(host)
+	if err != nil {
+		return nil, err
+	}
+	return net.ResolveUDPAddr(network, net.JoinHostPort(ip.String(), port))
 }

@@ -1,21 +1,16 @@
-package adapters
+package inbound
 
 import (
 	"net"
 
+	"github.com/Dreamacro/clash/component/socks5"
 	C "github.com/Dreamacro/clash/constant"
-	"github.com/Dreamacro/go-shadowsocks2/socks"
 )
 
 // SocketAdapter is a adapter for socks and redir connection
 type SocketAdapter struct {
-	conn     net.Conn
+	net.Conn
 	metadata *C.Metadata
-}
-
-// Close socks and redir connection
-func (s *SocketAdapter) Close() {
-	s.conn.Close()
 }
 
 // Metadata return destination metadata
@@ -23,19 +18,18 @@ func (s *SocketAdapter) Metadata() *C.Metadata {
 	return s.metadata
 }
 
-// Conn return raw net.Conn
-func (s *SocketAdapter) Conn() net.Conn {
-	return s.conn
-}
-
 // NewSocket is SocketAdapter generator
-func NewSocket(target socks.Addr, conn net.Conn, source C.SourceType) *SocketAdapter {
+func NewSocket(target socks5.Addr, conn net.Conn, source C.Type, netType C.NetWork) *SocketAdapter {
 	metadata := parseSocksAddr(target)
-	metadata.Source = source
-	metadata.SourceIP = parseSourceIP(conn)
+	metadata.NetWork = netType
+	metadata.Type = source
+	if ip, port, err := parseAddr(conn.RemoteAddr().String()); err == nil {
+		metadata.SrcIP = ip
+		metadata.SrcPort = port
+	}
 
 	return &SocketAdapter{
-		conn:     conn,
+		Conn:     conn,
 		metadata: metadata,
 	}
 }

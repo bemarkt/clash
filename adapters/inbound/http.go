@@ -1,4 +1,4 @@
-package adapters
+package inbound
 
 import (
 	"net"
@@ -10,14 +10,9 @@ import (
 
 // HTTPAdapter is a adapter for HTTP connection
 type HTTPAdapter struct {
+	net.Conn
 	metadata *C.Metadata
-	conn     net.Conn
 	R        *http.Request
-}
-
-// Close HTTP connection
-func (h *HTTPAdapter) Close() {
-	h.conn.Close()
 }
 
 // Metadata return destination metadata
@@ -25,19 +20,18 @@ func (h *HTTPAdapter) Metadata() *C.Metadata {
 	return h.metadata
 }
 
-// Conn return raw net.Conn of HTTP
-func (h *HTTPAdapter) Conn() net.Conn {
-	return h.conn
-}
-
 // NewHTTP is HTTPAdapter generator
 func NewHTTP(request *http.Request, conn net.Conn) *HTTPAdapter {
 	metadata := parseHTTPAddr(request)
-	metadata.SourceIP = parseSourceIP(conn)
+	metadata.Type = C.HTTP
+	if ip, port, err := parseAddr(conn.RemoteAddr().String()); err == nil {
+		metadata.SrcIP = ip
+		metadata.SrcPort = port
+	}
 	return &HTTPAdapter{
 		metadata: metadata,
 		R:        request,
-		conn:     conn,
+		Conn:     conn,
 	}
 }
 
