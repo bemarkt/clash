@@ -32,7 +32,7 @@ type RemoteRule struct {
 }
 
 func updateRulesets(w http.ResponseWriter, r *http.Request) {
-	rawRules := tunnel.Rules()
+	rawRules := T.Instance().Rules()
 
 	success := make(chan C.RemoteRule)
 	ctx, cancel := context.WithTimeout(context.Background(), C.DownloadTimeout)
@@ -80,7 +80,7 @@ func updateRulesets(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRules(w http.ResponseWriter, r *http.Request) {
-	rawRules := tunnel.Rules()
+	rawRules := T.Instance().Rules()
 
 	rules := []R{}
 	for _, rule := range rawRules {
