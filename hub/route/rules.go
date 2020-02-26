@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	C "github.com/Dreamacro/clash/constant"
-	T "github.com/Dreamacro/clash/tunnel"
+	"github.com/Dreamacro/clash/tunnel"
 
 	"github.com/go-chi/chi"
 	"github.com/go-chi/render"
@@ -32,7 +32,7 @@ type RemoteRule struct {
 }
 
 func updateRulesets(w http.ResponseWriter, r *http.Request) {
-	rawRules := T.Instance().Rules()
+	rawRules := tunnel.Rules()
 
 	success := make(chan C.RemoteRule)
 	ctx, cancel := context.WithTimeout(context.Background(), C.DownloadTimeout)
@@ -80,7 +80,7 @@ func updateRulesets(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRules(w http.ResponseWriter, r *http.Request) {
-	rawRules := T.Instance().Rules()
+	rawRules := tunnel.Rules()
 
 	rules := []R{}
 	for _, rule := range rawRules {
