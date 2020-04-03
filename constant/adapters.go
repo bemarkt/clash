@@ -10,15 +10,19 @@ import (
 // Adapter Type
 const (
 	Direct AdapterType = iota
-	Fallback
 	Reject
-	Selector
+
 	Shadowsocks
 	Snell
 	Socks5
 	Http
-	URLTest
 	Vmess
+	Trojan
+
+	Relay
+	Selector
+	Fallback
+	URLTest
 	LoadBalance
 )
 
@@ -59,10 +63,12 @@ type PacketConn interface {
 type ProxyAdapter interface {
 	Name() string
 	Type() AdapterType
+	StreamConn(c net.Conn, metadata *Metadata) (net.Conn, error)
 	DialContext(ctx context.Context, metadata *Metadata) (Conn, error)
 	DialUDP(metadata *Metadata) (PacketConn, error)
 	SupportUDP() bool
 	MarshalJSON() ([]byte, error)
+	Addr() string
 }
 
 type DelayHistory struct {
@@ -86,12 +92,9 @@ func (at AdapterType) String() string {
 	switch at {
 	case Direct:
 		return "Direct"
-	case Fallback:
-		return "Fallback"
 	case Reject:
 		return "Reject"
-	case Selector:
-		return "Selector"
+
 	case Shadowsocks:
 		return "Shadowsocks"
 	case Snell:
@@ -100,12 +103,22 @@ func (at AdapterType) String() string {
 		return "Socks5"
 	case Http:
 		return "Http"
-	case URLTest:
-		return "URLTest"
 	case Vmess:
 		return "Vmess"
+	case Trojan:
+		return "Trojan"
+
+	case Relay:
+		return "Relay"
+	case Selector:
+		return "Selector"
+	case Fallback:
+		return "Fallback"
+	case URLTest:
+		return "URLTest"
 	case LoadBalance:
 		return "LoadBalance"
+
 	default:
 		return "Unknown"
 	}
