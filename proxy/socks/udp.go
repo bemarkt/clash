@@ -5,6 +5,7 @@ import (
 
 	adapters "github.com/Dreamacro/clash/adapters/inbound"
 	"github.com/Dreamacro/clash/common/pool"
+	"github.com/Dreamacro/clash/common/sockopt"
 	"github.com/Dreamacro/clash/component/socks5"
 	C "github.com/Dreamacro/clash/constant"
 	"github.com/Dreamacro/clash/tunnel"
@@ -18,6 +19,11 @@ type SockUDPListener struct {
 
 func NewSocksUDPProxy(addr string) (*SockUDPListener, error) {
 	l, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sockopt.UDPReuseaddr(l.(*net.UDPConn))
 	if err != nil {
 		return nil, err
 	}
@@ -57,11 +63,11 @@ func handleSocksUDP(pc net.PacketConn, buf []byte, addr net.Addr) {
 		pool.BufPool.Put(buf[:cap(buf)])
 		return
 	}
-	packet := &fakeConn{
-		PacketConn: pc,
-		rAddr:      addr,
-		payload:    payload,
-		bufRef:     buf,
+	packet := &packet{
+		pc:      pc,
+		rAddr:   addr,
+		payload: payload,
+		bufRef:  buf,
 	}
 	tunnel.AddPacket(adapters.NewPacket(target, packet, C.SOCKS))
 }
